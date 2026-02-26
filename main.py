@@ -9,9 +9,22 @@ from threading import Thread
 TOKEN = os.getenv("TOKEN")
 
 ALLSVENSKA_LAG = [
-"AIK","Degerfors","Djurgården","GAIS","Häcken","Halmstad","Hammarby",
-"Brommapojkarna","Elfsborg","IFK Göteborg","Sirius","Kalmar FF",
-"Malmö FF","Mjällby","Örgryte","Västerås SK"
+    "AIK",
+    "Degerfors",
+    "Djurgården",
+    "GAIS",
+    "Häcken",
+    "Halmstad",
+    "Hammarby",
+    "Brommapojkarna",
+    "Elfsborg",
+    "Göteborg",
+    "Sirius",
+    "Kalmar",
+    "Malmö",
+    "Mjällby",
+    "Örgryte",
+    "Västerås"
 ]
 
 TABELL_DEADLINE = datetime(2026, 3, 28)
