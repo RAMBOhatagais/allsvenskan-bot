@@ -148,19 +148,4 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(msg)
 
 
-from flask import Flask
-from threading import Thread
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot alive"
-
-def start_web():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
-if __name__ == "__main__":
-    Thread(target=start_web).start()
-    client.run(TOKEN)
-
+client.run(TOKEN)
