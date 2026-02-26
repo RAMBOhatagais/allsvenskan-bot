@@ -8,9 +8,22 @@ import time
 TOKEN = os.getenv("TOKEN")
 
 ALLSVENSKA_LAG = [
-    "AIK","Degerfors","Djurgården","GAIS","Häcken","Halmstad","Hammarby",
-    "Brommapojkarna","Elfsborg","Göteborg","Sirius","Kalmar","Malmö",
-    "Mjällby","Örgryte","Västerås"
+    "AIK",
+    "Degerfors",
+    "Djurgården",
+    "GAIS",
+    "Häcken",
+    "Halmstad",
+    "Hammarby",
+    "Brommapojkarna",
+    "Elfsborg",
+    "Göteborg",
+    "Sirius",
+    "Kalmar",
+    "Malmö",
+    "Mjällby",
+    "Örgryte",
+    "Västerås"
 ]
 
 TABELL_DEADLINE = datetime(2026, 3, 28)
@@ -22,37 +35,20 @@ tree = app_commands.CommandTree(client)
 conn = sqlite3.connect("tips.db")
 c = conn.cursor()
 
-# =========================
-# TABELLER PER SERVER
-# =========================
-c.execute("CREATE TABLE IF NOT EXISTS matchtips(guild_id TEXT, user_id TEXT, tip TEXT)")
-c.execute("CREATE TABLE IF NOT EXISTS points(guild_id TEXT, user_id TEXT, pts INTEGER)")
-c.execute("CREATE TABLE IF NOT EXISTS tabell(guild_id TEXT, user_id TEXT, position INTEGER, team TEXT)")
+c.execute("CREATE TABLE IF NOT EXISTS matchtips(user_id TEXT, tip TEXT)")
+c.execute("CREATE TABLE IF NOT EXISTS points(user_id TEXT, pts INTEGER)")
+c.execute("CREATE TABLE IF NOT EXISTS tabell(user_id TEXT, position INTEGER, team TEXT)")
 conn.commit()
 
 current_match = None
 
 
-# =========================
-# POÄNG PER SERVER
-# =========================
-def add_points(guild_id, user, pts):
-    row = c.execute(
-        "SELECT pts FROM points WHERE guild_id=? AND user_id=?",
-        (guild_id, user)
-    ).fetchone()
-
+def add_points(user, pts):
+    row = c.execute("SELECT pts FROM points WHERE user_id=?", (user,)).fetchone()
     if row:
-        c.execute(
-            "UPDATE points SET pts=? WHERE guild_id=? AND user_id=?",
-            (row[0] + pts, guild_id, user)
-        )
+        c.execute("UPDATE points SET pts=? WHERE user_id=?", (row[0] + pts, user))
     else:
-        c.execute(
-            "INSERT INTO points VALUES (?,?,?)",
-            (guild_id, user, pts)
-        )
-
+        c.execute("INSERT INTO points VALUES (?,?)", (user, pts))
     conn.commit()
 
 
@@ -62,9 +58,7 @@ async def on_ready():
     print("Bot ready")
 
 
-# =========================
-# ADMIN: SÄTT MATCH
-# =========================
+# ADMIN
 @tree.command(name="set_match", description="Admin: sätt veckans match")
 async def set_match(interaction: discord.Interaction, match: str):
     if not interaction.user.guild_permissions.administrator:
@@ -73,72 +67,44 @@ async def set_match(interaction: discord.Interaction, match: str):
 
     global current_match
     current_match = match
-
-    c.execute(
-        "DELETE FROM matchtips WHERE guild_id=?",
-        (str(interaction.guild.id),)
-    )
+    c.execute("DELETE FROM matchtips")
     conn.commit()
 
     await interaction.response.send_message(f"Ny match: {match}")
 
 
-# =========================
-# ADMIN: RAPPORTERA RESULTAT
-# =========================
 @tree.command(name="rapportera_resultat", description="Admin: rapportera 1/X/2")
 async def rapportera(interaction: discord.Interaction, resultat: str):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Endast admin.", ephemeral=True)
         return
 
-    guild_id = str(interaction.guild.id)
-
-    rows = c.execute(
-        "SELECT user_id, tip FROM matchtips WHERE guild_id=?",
-        (guild_id,)
-    ).fetchall()
-
+    rows = c.execute("SELECT user_id, tip FROM matchtips").fetchall()
     winners = 0
 
     for user, tip in rows:
         if tip == resultat:
-            add_points(guild_id, user, 3)
+            add_points(user, 3)
             winners += 1
 
     await interaction.response.send_message(f"{winners} fick 3 poäng!")
 
 
-# =========================
-# TIPPA MATCH
-# =========================
+# MATCHTIP
 @tree.command(name="tippa_match", description="Tippa 1/X/2")
 async def tippa_match(interaction: discord.Interaction, tip: str):
     if tip not in ["1", "X", "2"]:
         await interaction.response.send_message("Ange 1 X eller 2", ephemeral=True)
         return
 
-    guild_id = str(interaction.guild.id)
-    user_id = str(interaction.user.id)
-
-    c.execute(
-        "DELETE FROM matchtips WHERE guild_id=? AND user_id=?",
-        (guild_id, user_id)
-    )
-
-    c.execute(
-        "INSERT INTO matchtips VALUES (?,?,?)",
-        (guild_id, user_id, tip)
-    )
-
+    c.execute("DELETE FROM matchtips WHERE user_id=?", (str(interaction.user.id),))
+    c.execute("INSERT INTO matchtips VALUES (?,?)", (str(interaction.user.id), tip))
     conn.commit()
 
     await interaction.response.send_message("Tips sparat!", ephemeral=True)
 
 
-# =========================
-# TIPPA TABELL
-# =========================
+# TABELL
 @tree.command(name="tippa_tabell", description="Tippa sluttabell")
 async def tippa_tabell(interaction: discord.Interaction, tips: str):
 
@@ -146,12 +112,9 @@ async def tippa_tabell(interaction: discord.Interaction, tips: str):
         await interaction.response.send_message("Tabelltips stängda.", ephemeral=True)
         return
 
-    guild_id = str(interaction.guild.id)
-    user_id = str(interaction.user.id)
-
     existing = c.execute(
-        "SELECT * FROM tabell WHERE guild_id=? AND user_id=?",
-        (guild_id, user_id)
+        "SELECT * FROM tabell WHERE user_id=?",
+        (str(interaction.user.id),)
     ).fetchone()
 
     if existing:
@@ -170,25 +133,20 @@ async def tippa_tabell(interaction: discord.Interaction, tips: str):
             return
 
     for i, t in enumerate(teams):
-        c.execute(
-            "INSERT INTO tabell VALUES (?,?,?,?)",
-            (guild_id, user_id, i + 1, t)
-        )
+        c.execute("INSERT INTO tabell VALUES (?,?,?)",
+                  (str(interaction.user.id), i + 1, t))
 
     conn.commit()
 
     await interaction.response.send_message("Tabelltips låst!", ephemeral=True)
 
 
-# =========================
 # LEADERBOARD
-# =========================
 @tree.command(name="leaderboard", description="Poäng")
 async def leaderboard(interaction: discord.Interaction):
 
     rows = c.execute(
-        "SELECT user_id, pts FROM points WHERE guild_id=? ORDER BY pts DESC",
-        (str(interaction.guild.id),)
+        "SELECT user_id, pts FROM points ORDER BY pts DESC"
     ).fetchall()
 
     if not rows:
@@ -202,50 +160,7 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(msg)
 
 
-# =========================
-# ADMIN: RESET POÄNG (SERVER)
-# =========================
-@tree.command(name="reset_poäng", description="Admin: nollställ poäng i denna server")
-async def reset_poang(interaction: discord.Interaction):
-
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Endast admin.", ephemeral=True)
-        return
-
-    c.execute(
-        "DELETE FROM points WHERE guild_id=?",
-        (str(interaction.guild.id),)
-    )
-    conn.commit()
-
-    await interaction.response.send_message("Poängen är nollställda i denna server.")
-
-
-# =========================
-# ADMIN: RESET ALLT (SERVER)
-# =========================
-@tree.command(name="reset_allt", description="Admin: nollställ allt i denna server")
-async def reset_allt(interaction: discord.Interaction):
-
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Endast admin.", ephemeral=True)
-        return
-
-    guild_id = str(interaction.guild.id)
-
-    c.execute("DELETE FROM points WHERE guild_id=?", (guild_id,))
-    c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
-    c.execute("DELETE FROM tabell WHERE guild_id=?", (guild_id,))
-    conn.commit()
-
-    await interaction.response.send_message("Allt är nu nollställt i denna server.")
-
-
-# =========================
-# START BOT (RAILWAY)
-# =========================
 client.run(TOKEN)
 
-# håller containern igång på Railway
 while True:
     time.sleep(3600)
