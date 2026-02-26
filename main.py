@@ -3,6 +3,8 @@ from discord import app_commands
 import sqlite3
 import os
 from datetime import datetime
+from flask import Flask
+from threading import Thread
 
 TOKEN = os.getenv("TOKEN")
 
@@ -146,4 +148,18 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(msg)
 
 
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot alive"
+
+def run():
+    app.run(host="0.0.0.0", port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
 client.run(TOKEN)
