@@ -157,11 +157,9 @@ app = Flask(__name__)
 def home():
     return "Bot alive"
 
-def run_web():
+def start_web():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-def run_bot():
-    client.run(TOKEN)
+Thread(target=start_web, daemon=True).start()
 
-Thread(target=run_web).start()
-run_bot()
+client.run(TOKEN)
