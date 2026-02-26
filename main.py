@@ -3,6 +3,7 @@ from discord import app_commands
 import sqlite3
 import os
 from datetime import datetime
+import time
 
 TOKEN = os.getenv("TOKEN")
 
@@ -202,7 +203,7 @@ async def leaderboard(interaction: discord.Interaction):
 
 
 # =========================
-# ADMIN: RESET POÄNG (DENNA SERVER)
+# ADMIN: RESET POÄNG (SERVER)
 # =========================
 @tree.command(name="reset_poäng", description="Admin: nollställ poäng i denna server")
 async def reset_poang(interaction: discord.Interaction):
@@ -221,7 +222,7 @@ async def reset_poang(interaction: discord.Interaction):
 
 
 # =========================
-# ADMIN: RESET ALLT (DENNA SERVER)
+# ADMIN: RESET ALLT (SERVER)
 # =========================
 @tree.command(name="reset_allt", description="Admin: nollställ allt i denna server")
 async def reset_allt(interaction: discord.Interaction):
@@ -240,7 +241,11 @@ async def reset_allt(interaction: discord.Interaction):
     await interaction.response.send_message("Allt är nu nollställt i denna server.")
 
 
+# =========================
+# START BOT (RAILWAY)
+# =========================
 client.run(TOKEN)
 
+# håller containern igång på Railway
 while True:
     time.sleep(3600)
