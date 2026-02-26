@@ -241,3 +241,6 @@ async def reset_allt(interaction: discord.Interaction):
 
 
 client.run(TOKEN)
+
+while True:
+    time.sleep(3600)
