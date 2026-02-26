@@ -148,4 +148,9 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(msg)
 
 
+import time
+
 client.run(TOKEN)
+
+while True:
+    time.sleep(3600)
