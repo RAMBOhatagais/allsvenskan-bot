@@ -160,6 +160,7 @@ def home():
 def start_web():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-Thread(target=start_web, daemon=True).start()
+if __name__ == "__main__":
+    Thread(target=start_web).start()
+    client.run(TOKEN)
 
-client.run(TOKEN)
