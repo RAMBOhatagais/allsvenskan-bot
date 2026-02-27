@@ -13,24 +13,46 @@ ALLSVENSKA_LAG = [
     "Mjällby","Örgryte","Västerås"
 ]
 
-# 🔴 STÄNGER TABELLTIPS 1 APRIL 2026
 TABELL_DEADLINE = datetime(2026, 4, 1)
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-conn = sqlite3.connect("tips.db")
+conn = sqlite3.connect("tips.db", check_same_thread=False)
 c = conn.cursor()
 
-# 🔴 TABELLER PER SERVER
+# ================= DATABAS =================
+
 c.execute("CREATE TABLE IF NOT EXISTS matchtips(guild_id TEXT, user_id TEXT, tip TEXT)")
 c.execute("CREATE TABLE IF NOT EXISTS points(guild_id TEXT, user_id TEXT, pts INTEGER)")
 c.execute("CREATE TABLE IF NOT EXISTS tabell(guild_id TEXT, user_id TEXT, position INTEGER, team TEXT)")
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS match_settings(
+    guild_id TEXT PRIMARY KEY,
+    is_open INTEGER
+)
+""")
+
+# ================= AUTO MIGRATION =================
+
+def column_exists(table, column):
+    columns = c.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(col[1] == column for col in columns)
+
+if not column_exists("match_settings", "deadline"):
+    c.execute("ALTER TABLE match_settings ADD COLUMN deadline TEXT")
+
+if not column_exists("match_settings", "round"):
+    c.execute("ALTER TABLE match_settings ADD COLUMN round INTEGER")
+
+if not column_exists("match_settings", "live_sent"):
+    c.execute("ALTER TABLE match_settings ADD COLUMN live_sent INTEGER DEFAULT 0")
+
 conn.commit()
 
-current_match = None
-
+# ================= POÄNG =================
 
 def add_points(guild_id, user, pts):
     row = c.execute(
@@ -50,31 +72,66 @@ def add_points(guild_id, user, pts):
         )
     conn.commit()
 
+# ================= READY =================
 
 @client.event
 async def on_ready():
     await tree.sync()
     print("Bot ready")
 
-
 # ================= ADMIN =================
 
 @tree.command(name="set_match", description="Admin: sätt veckans match")
-async def set_match(interaction: discord.Interaction, match: str):
+@app_commands.describe(
+    match="Matchen (ex: Hammarby - Mjällby)",
+    deadline="YYYY-MM-DD HH:MM",
+    round="Omgångsnummer (1-30)",
+    text="Valfri hype-text"
+)
+async def set_match(
+    interaction: discord.Interaction,
+    match: str,
+    deadline: str,
+    round: int,
+    text: str = None
+):
+
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Endast admin.", ephemeral=True)
         return
 
     guild_id = str(interaction.guild.id)
 
-    global current_match
-    current_match = match
+    try:
+        datetime.strptime(deadline, "%Y-%m-%d %H:%M")
+    except:
+        await interaction.response.send_message(
+            "Fel format. Använd: YYYY-MM-DD HH:MM",
+            ephemeral=True
+        )
+        return
 
+    # Rensa gamla tips
     c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
+
+    # Spara inställningar
+    c.execute(
+        "REPLACE INTO match_settings (guild_id, is_open, deadline, round, live_sent) VALUES (?, ?, ?, ?, ?)",
+        (guild_id, 1, deadline, round, 0)
+    )
+
     conn.commit()
 
-    await interaction.response.send_message(f"Ny match: {match}")
+    message = "@everyone ⚽ **Ny omgång är satt!**\n\n"
 
+    if text:
+        message += f"{text}\n\n"
+
+    message += f"**Veckans match:** {match}\n"
+    message += f"⏳ Deadline: {deadline}\n\n"
+    message += "Tippa med `/tippa_match 1`, `/tippa_match X` eller `/tippa_match 2`"
+
+    await interaction.response.send_message(message)
 
 @tree.command(name="rapportera_resultat", description="Admin: rapportera 1/X/2")
 async def rapportera(interaction: discord.Interaction, resultat: str):
@@ -98,26 +155,23 @@ async def rapportera(interaction: discord.Interaction, resultat: str):
 
     await interaction.response.send_message(f"{winners} fick 3 poäng!")
 
-
-# 🔴 RESET POÄNG PER SERVER
-@tree.command(name="reset_points", description="Admin: nollställ poäng på servern")
+@tree.command(name="reset_points", description="Admin: nollställ poäng")
 async def reset_points(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Endast admin.", ephemeral=True)
         return
 
     guild_id = str(interaction.guild.id)
-
     c.execute("DELETE FROM points WHERE guild_id=?", (guild_id,))
     conn.commit()
 
-    await interaction.response.send_message("Poäng resetade på denna server.")
-
+    await interaction.response.send_message("Poäng resetade.")
 
 # ================= MATCHTIP =================
 
 @tree.command(name="tippa_match", description="Tippa 1/X/2")
 async def tippa_match(interaction: discord.Interaction, tip: str):
+
     if tip not in ["1", "X", "2"]:
         await interaction.response.send_message("Ange 1 X eller 2", ephemeral=True)
         return
@@ -125,6 +179,53 @@ async def tippa_match(interaction: discord.Interaction, tip: str):
     guild_id = str(interaction.guild.id)
     user_id = str(interaction.user.id)
 
+    status = c.execute(
+        "SELECT is_open, deadline, round, live_sent FROM match_settings WHERE guild_id=?",
+        (guild_id,)
+    ).fetchone()
+
+    if not status:
+        await interaction.response.send_message("Ingen match är satt.", ephemeral=True)
+        return
+
+    is_open, deadline_str, round_number, live_sent = status
+    deadline_dt = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M")
+
+    # Deadline passerad
+    if datetime.now() >= deadline_dt:
+
+        c.execute(
+            "UPDATE match_settings SET is_open=0 WHERE guild_id=?",
+            (guild_id,)
+        )
+
+        # Skicka LIVE-meddelande en gång
+        if live_sent == 0:
+            await interaction.channel.send(
+                f"@everyone 🚨 **OMGÅNG {round_number} ÄR LIVE!!!**"
+            )
+
+            c.execute(
+                "UPDATE match_settings SET live_sent=1 WHERE guild_id=?",
+                (guild_id,)
+            )
+
+        conn.commit()
+
+        await interaction.response.send_message(
+            "Deadline har passerat. Matchtips är stängda.",
+            ephemeral=True
+        )
+        return
+
+    if is_open == 0:
+        await interaction.response.send_message(
+            "Matchtips är stängda.",
+            ephemeral=True
+        )
+        return
+
+    # Spara tips
     c.execute(
         "DELETE FROM matchtips WHERE guild_id=? AND user_id=?",
         (guild_id, user_id)
@@ -137,7 +238,6 @@ async def tippa_match(interaction: discord.Interaction, tip: str):
 
     conn.commit()
     await interaction.response.send_message("Tips sparat!", ephemeral=True)
-
 
 # ================= TABELL =================
 
@@ -162,8 +262,8 @@ async def tippa_tabell(interaction: discord.Interaction, tips: str):
 
     teams = [t.strip() for t in tips.split(",")]
 
-    if len(teams) != 16:
-        await interaction.response.send_message("Du måste ange 16 lag.", ephemeral=True)
+    if len(teams) != 16 or len(set(teams)) != 16:
+        await interaction.response.send_message("Fel antal lag eller dubletter.", ephemeral=True)
         return
 
     for lag in teams:
@@ -179,7 +279,6 @@ async def tippa_tabell(interaction: discord.Interaction, tips: str):
 
     conn.commit()
     await interaction.response.send_message("Tabelltips låst!", ephemeral=True)
-
 
 # ================= LEADERBOARD =================
 
@@ -202,7 +301,6 @@ async def leaderboard(interaction: discord.Interaction):
         msg += f"<@{u}> - {p}p\n"
 
     await interaction.response.send_message(msg)
-
 
 # ================= START =================
 
