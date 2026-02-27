@@ -16,15 +16,17 @@ ALLSVENSKA_LAG = [
 
 TABELL_DEADLINE = datetime(2026, 4, 1)
 
+# ===== INTENTS =====
 intents = discord.Intents.default()
+intents.members = True
+
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 conn = sqlite3.connect("tips.db", check_same_thread=False)
 c = conn.cursor()
 
-# ================= DATABAS =================
-
+# ===== DATABASE =====
 c.execute("CREATE TABLE IF NOT EXISTS matchtips(guild_id TEXT, user_id TEXT, tip TEXT)")
 c.execute("CREATE TABLE IF NOT EXISTS points(guild_id TEXT, user_id TEXT, pts INTEGER)")
 c.execute("CREATE TABLE IF NOT EXISTS tabell(guild_id TEXT, user_id TEXT, position INTEGER, team TEXT)")
@@ -45,11 +47,9 @@ CREATE TABLE IF NOT EXISTS final_table(
     team TEXT
 )
 """)
-
 conn.commit()
 
-# ================= POÄNG =================
-
+# ===== POINT SYSTEM =====
 def add_points(guild_id, user, pts):
     row = c.execute(
         "SELECT pts FROM points WHERE guild_id=? AND user_id=?",
@@ -68,8 +68,7 @@ def add_points(guild_id, user, pts):
         )
     conn.commit()
 
-# ================= DEADLINE CHECKER =================
-
+# ===== DEADLINE CHECKER =====
 async def deadline_checker():
     await client.wait_until_ready()
 
@@ -81,7 +80,6 @@ async def deadline_checker():
         now_sweden = datetime.now(ZoneInfo("Europe/Stockholm"))
 
         for guild_id, deadline_str, round_number, live_sent, channel_id in rows:
-
             if not deadline_str:
                 continue
 
@@ -89,7 +87,6 @@ async def deadline_checker():
             deadline_dt = deadline_dt.replace(tzinfo=ZoneInfo("Europe/Stockholm"))
 
             if now_sweden >= deadline_dt:
-
                 c.execute("UPDATE match_settings SET is_open=0 WHERE guild_id=?", (guild_id,))
 
                 if live_sent == 0 and channel_id:
@@ -111,8 +108,7 @@ async def deadline_checker():
 
         await asyncio.sleep(30)
 
-# ================= READY =================
-
+# ===== READY =====
 @client.event
 async def on_ready():
     await tree.sync()
@@ -120,7 +116,7 @@ async def on_ready():
     print("Bot ready")
     client.loop.create_task(deadline_checker())
 
-# ================= ADMIN =================
+# ===== ADMIN COMMANDS =====
 
 @app_commands.checks.has_permissions(administrator=True)
 @tree.command(name="set_match", description="Admin: sätt veckans match")
@@ -149,19 +145,17 @@ async def set_match(interaction: discord.Interaction, match: str, deadline: str,
 @tree.command(name="rapportera_resultat", description="Admin: rapportera matchresultat")
 async def rapportera_resultat(interaction: discord.Interaction, resultat: str):
 
-    if resultat not in ["1", "X", "2"]:
+    if resultat not in ["1","X","2"]:
         await interaction.response.send_message("Ange 1, X eller 2.", ephemeral=True)
         return
 
     guild_id = str(interaction.guild.id)
-
     rows = c.execute(
         "SELECT user_id, tip FROM matchtips WHERE guild_id=?",
         (guild_id,)
     ).fetchall()
 
     winners = 0
-
     for user_id, tip in rows:
         if tip == resultat:
             add_points(guild_id, user_id, 3)
@@ -228,7 +222,7 @@ async def slut_tabell(interaction: discord.Interaction, tabell: str):
     conn.commit()
     await interaction.response.send_message("Tabellpoäng tillagda.")
 
-# ================= USER COMMANDS =================
+# ===== USER COMMANDS =====
 
 @tree.command(name="tippa_match", description="Tippa 1/X/2")
 async def tippa_match(interaction: discord.Interaction, tip: str):
@@ -308,7 +302,7 @@ async def leaderboard(interaction: discord.Interaction):
 
     for i,(user_id,pts) in enumerate(rows):
         member = interaction.guild.get_member(int(user_id))
-        name = member.display_name if member else user_id
+        name = member.display_name if member else f"<@{user_id}>"
         msg += f"{i+1}. {name} - {pts}p\n"
 
     await interaction.response.send_message(msg)
@@ -343,6 +337,5 @@ async def placering(interaction: discord.Interaction):
         ephemeral=True
     )
 
-# ================= START =================
-
+# ===== START =====
 client.run(TOKEN)
