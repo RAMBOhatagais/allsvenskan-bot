@@ -347,7 +347,7 @@ async def leaderboard(interaction: discord.Interaction):
         name = member.display_name if member else f"<@{user_id}>"
         msg += f"{i+1}. {name} - {pts}p\n"
 
-    await interaction.response.send_message(msg)
+    await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="placering", description="Se din placering")
 async def placering(interaction: discord.Interaction):
