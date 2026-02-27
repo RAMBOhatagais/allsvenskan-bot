@@ -88,6 +88,7 @@ async def deadline_checker():
     await client.wait_until_ready()
 
     while not client.is_closed():
+
         rows = c.execute(
             "SELECT guild_id, deadline, round, live_sent, channel_id FROM match_settings WHERE is_open=1"
         ).fetchall()
@@ -95,6 +96,7 @@ async def deadline_checker():
         now_sweden = datetime.now(ZoneInfo("Europe/Stockholm"))
 
         for guild_id, deadline_str, round_number, live_sent, channel_id in rows:
+
             if not deadline_str:
                 continue
 
@@ -176,10 +178,45 @@ async def set_match(interaction: discord.Interaction, match: str, deadline: str,
 
     await interaction.response.send_message("@everyone", embed=embed)
 
-# ================= SLUTTABELL =================
+@tree.command(name="rapportera_resultat", description="Admin: rapportera matchresultat")
+async def rapportera_resultat(interaction: discord.Interaction, resultat: str):
 
-@tree.command(name="slut_tabell", description="Admin: mata in riktig sluttabell")
-async def slut_tabell(interaction: discord.Interaction, tabell: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Endast admin.", ephemeral=True)
+        return
+
+    if resultat not in ["1", "X", "2"]:
+        await interaction.response.send_message("Ange 1, X eller 2.", ephemeral=True)
+        return
+
+    guild_id = str(interaction.guild.id)
+
+    rows = c.execute(
+        "SELECT user_id, tip FROM matchtips WHERE guild_id=?",
+        (guild_id,)
+    ).fetchall()
+
+    winners = 0
+
+    for user_id, tip in rows:
+        if tip == resultat:
+            add_points(guild_id, user_id, 3)
+            winners += 1
+
+    c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
+    conn.commit()
+
+    embed = discord.Embed(
+        title="📢 Resultat rapporterat",
+        description=f"Rätt resultat: **{resultat}**",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Rätt tippade", value=f"{winners} fick 3 poäng", inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="reset_points", description="Admin: nollställ ALLT på servern")
+async def reset_points(interaction: discord.Interaction):
 
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Endast admin.", ephemeral=True)
@@ -187,74 +224,47 @@ async def slut_tabell(interaction: discord.Interaction, tabell: str):
 
     guild_id = str(interaction.guild.id)
 
-    teams = [t.strip() for t in tabell.split(",")]
-
-    if len(teams) != 16 or len(set(teams)) != 16:
-        await interaction.response.send_message("Du måste ange 16 unika lag.", ephemeral=True)
-        return
-
+    c.execute("DELETE FROM points WHERE guild_id=?", (guild_id,))
+    c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
+    c.execute("DELETE FROM tabell WHERE guild_id=?", (guild_id,))
     c.execute("DELETE FROM final_table WHERE guild_id=?", (guild_id,))
-
-    for i, team in enumerate(teams):
-        c.execute("INSERT INTO final_table VALUES (?,?,?)", (guild_id, i+1, team))
-
-    users = c.execute(
-        "SELECT DISTINCT user_id FROM tabell WHERE guild_id=?",
-        (guild_id,)
-    ).fetchall()
-
-    for (user_id,) in users:
-        user_tips = c.execute(
-            "SELECT position, team FROM tabell WHERE guild_id=? AND user_id=?",
-            (guild_id, user_id)
-        ).fetchall()
-
-        points_to_add = 0
-
-        for position, team in user_tips:
-            real_position = c.execute(
-                "SELECT position FROM final_table WHERE guild_id=? AND team=?",
-                (guild_id, team)
-            ).fetchone()
-
-            if real_position and real_position[0] == position:
-                points_to_add += 3
-
-        if points_to_add > 0:
-            add_points(guild_id, user_id, points_to_add)
-
-    c.execute(
-        "REPLACE INTO season_settings (guild_id, season_finished) VALUES (?, ?)",
-        (guild_id, 1)
-    )
+    c.execute("DELETE FROM season_settings WHERE guild_id=?", (guild_id,))
+    c.execute("DELETE FROM match_settings WHERE guild_id=?", (guild_id,))
 
     conn.commit()
 
-    # === ANNONSERA TOPP 5 ===
-    rows = c.execute(
-        "SELECT user_id, pts FROM points WHERE guild_id=? ORDER BY pts DESC LIMIT 5",
+    await interaction.response.send_message("⚠️ All data för servern är nu nollställd.")
+
+# ================= TIPS =================
+
+@tree.command(name="tippa_match", description="Tippa 1/X/2")
+async def tippa_match(interaction: discord.Interaction, tip: str):
+
+    if tip not in ["1", "X", "2"]:
+        await interaction.response.send_message("Ange 1, X eller 2.", ephemeral=True)
+        return
+
+    guild_id = str(interaction.guild.id)
+    user_id = str(interaction.user.id)
+
+    status = c.execute(
+        "SELECT is_open FROM match_settings WHERE guild_id=?",
         (guild_id,)
-    ).fetchall()
+    ).fetchone()
 
-    embed = discord.Embed(
-        title="🏆 SLUTRESULTAT – TOPP 5",
-        color=discord.Color.gold()
-    )
+    if not status or status[0] == 0:
+        await interaction.response.send_message("Matchtips är stängda.", ephemeral=True)
+        return
 
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    c.execute("DELETE FROM matchtips WHERE guild_id=? AND user_id=?", (guild_id, user_id))
+    c.execute("INSERT INTO matchtips VALUES (?,?,?)", (guild_id, user_id, tip))
 
-    for i, (user_id, pts) in enumerate(rows):
-        member = interaction.guild.get_member(int(user_id))
-        name = member.display_name if member else f"User {user_id}"
-        embed.add_field(name=f"{medals[i]} {name}", value=f"{pts} poäng", inline=False)
-
-    embed.set_footer(text="Allsvenskan Tipset – Säsongen är avslutad!")
-
-    await interaction.response.send_message("@everyone", embed=embed)
+    conn.commit()
+    await interaction.response.send_message("Tips sparat!", ephemeral=True)
 
 # ================= LEADERBOARD =================
 
-@tree.command(name="leaderboard", description="Matchpoäng – Topp 20")
+@tree.command(name="leaderboard", description="Topp 20")
 async def leaderboard(interaction: discord.Interaction):
 
     guild_id = str(interaction.guild.id)
@@ -268,24 +278,17 @@ async def leaderboard(interaction: discord.Interaction):
         await interaction.response.send_message("Inga poäng ännu.")
         return
 
-    embed = discord.Embed(
-        title="🏆 Leaderboard – Matchpoäng",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="🏆 Leaderboard", color=discord.Color.gold())
 
     medals = ["🥇", "🥈", "🥉"]
 
-    for index, (user_id, pts) in enumerate(rows):
+    for i, (user_id, pts) in enumerate(rows):
         member = interaction.guild.get_member(int(user_id))
         name = member.display_name if member else f"User {user_id}"
-
-        prefix = medals[index] if index < 3 else f"{index+1}."
-
+        prefix = medals[i] if i < 3 else f"{i+1}."
         embed.add_field(name=f"{prefix} {name}", value=f"{pts} poäng", inline=False)
 
     await interaction.response.send_message(embed=embed)
-
-# ================= PLACERING =================
 
 @tree.command(name="placering", description="Se din placering")
 async def placering(interaction: discord.Interaction):
@@ -311,10 +314,6 @@ async def placering(interaction: discord.Interaction):
             position = index + 1
             user_points = pts
             break
-
-    if position is None:
-        await interaction.response.send_message("Du har inga poäng ännu.", ephemeral=True)
-        return
 
     embed = discord.Embed(title="📍 Din placering", color=discord.Color.blue())
     embed.add_field(name="Placering", value=f"{position} / {total}", inline=False)
