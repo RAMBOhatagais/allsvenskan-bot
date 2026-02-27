@@ -85,6 +85,77 @@ def add_points(guild_id, user, pts):
         )
     conn.commit()
 
+# ================= TABELL DROPDOWN =================
+
+class TabellDropdown(discord.ui.View):
+    def __init__(self, interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.interaction = interaction
+        self.guild_id = str(interaction.guild.id)
+        self.user_id = str(interaction.user.id)
+        self.position = 1
+        self.selected_teams = []
+        self.available_teams = ALLSVENSKA_LAG.copy()
+        self.message = None
+        self.add_item(self.create_select())
+
+    def create_select(self):
+        select = discord.ui.Select(
+            placeholder=f"Välj lag för plats {self.position}",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label=team)
+                for team in self.available_teams
+            ]
+        )
+        select.callback = self.select_callback
+        return select
+
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.interaction.user.id:
+            await interaction.response.send_message(
+                "Detta är inte din tabell!", ephemeral=True
+            )
+            return
+
+        chosen = interaction.data["values"][0]
+        self.selected_teams.append(chosen)
+        self.available_teams.remove(chosen)
+        self.position += 1
+
+        if self.position > 16:
+            c.execute("DELETE FROM tabell WHERE guild_id=? AND user_id=?",
+                      (self.guild_id, self.user_id))
+
+            for i, team in enumerate(self.selected_teams):
+                c.execute("INSERT INTO tabell VALUES (?,?,?,?)",
+                          (self.guild_id, self.user_id, i+1, team))
+
+            conn.commit()
+
+            await interaction.response.edit_message(
+                content="✅ Tabelltips sparat!",
+                view=None
+            )
+            self.stop()
+            return
+
+        self.clear_items()
+        self.add_item(self.create_select())
+
+        await interaction.response.edit_message(
+            content=f"Välj lag för plats {self.position}",
+            view=self
+        )
+
+    async def on_timeout(self):
+        if self.message:
+            await self.message.edit(
+                content="⏳ Tiden gick ut. Kör /tippa_tabell igen.",
+                view=None
+            )
+
 # ================= DEADLINE CHECKER =================
 
 async def deadline_checker():
@@ -131,141 +202,8 @@ async def deadline_checker():
 @client.event
 async def on_ready():
     await tree.sync()
-    print("Global commands synced")
     print("Bot ready")
     client.loop.create_task(deadline_checker())
-
-# ================= ADMIN =================
-
-@app_commands.checks.has_permissions(administrator=True)
-@tree.command(name="set_tipskanal", description="Admin: sätt botens kanal")
-async def set_tipskanal(interaction: discord.Interaction):
-    guild_id = str(interaction.guild.id)
-
-    c.execute("""
-        INSERT INTO match_settings (guild_id, channel_id)
-        VALUES (?,?)
-        ON CONFLICT(guild_id)
-        DO UPDATE SET channel_id=excluded.channel_id
-    """, (guild_id, str(interaction.channel.id)))
-
-    conn.commit()
-    await interaction.response.send_message("✅ Denna kanal är nu botens officiella tipskanal.")
-
-@app_commands.checks.has_permissions(administrator=True)
-@tree.command(name="set_match", description="Admin: sätt veckans match")
-async def set_match(interaction: discord.Interaction, match: str, deadline: str, round: int):
-
-    if not correct_channel(interaction):
-        return
-
-    guild_id = str(interaction.guild.id)
-
-    try:
-        datetime.strptime(deadline, "%Y-%m-%d %H:%M")
-    except:
-        await interaction.response.send_message("Fel format YYYY-MM-DD HH:MM", ephemeral=True)
-        return
-
-    c.execute("""
-        UPDATE match_settings
-        SET is_open=1, deadline=?, round=?, live_sent=0
-        WHERE guild_id=?
-    """, (deadline, round, guild_id))
-
-    c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
-    conn.commit()
-
-    await interaction.response.send_message(
-        f"<@&{ALLSVENSKAN_ROLE_ID}> ⚽ Omgång {round}\nMatch: {match}\nDeadline: {deadline} (svensk tid)"
-    )
-
-@app_commands.checks.has_permissions(administrator=True)
-@tree.command(name="rapportera_resultat", description="Admin: rapportera matchresultat")
-async def rapportera_resultat(interaction: discord.Interaction, resultat: str):
-
-    if not correct_channel(interaction):
-        return
-
-    if resultat not in ["1","X","2"]:
-        return
-
-    guild_id = str(interaction.guild.id)
-
-    rows = c.execute(
-        "SELECT user_id, tip FROM matchtips WHERE guild_id=?",
-        (guild_id,)
-    ).fetchall()
-
-    winners = 0
-    for user_id, tip in rows:
-        if tip == resultat:
-            add_points(guild_id, user_id, 3)
-            winners += 1
-
-    c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
-    conn.commit()
-
-    await interaction.response.send_message(f"{winners} fick 3 poäng!")
-
-@app_commands.checks.has_permissions(administrator=True)
-@tree.command(name="reset_points", description="Admin: nollställ ALLT")
-async def reset_points(interaction: discord.Interaction):
-
-    if not correct_channel(interaction):
-        return
-
-    guild_id = str(interaction.guild.id)
-
-    c.execute("DELETE FROM points WHERE guild_id=?", (guild_id,))
-    c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
-    c.execute("DELETE FROM tabell WHERE guild_id=?", (guild_id,))
-    c.execute("DELETE FROM final_table WHERE guild_id=?", (guild_id,))
-    c.execute("DELETE FROM match_settings WHERE guild_id=?", (guild_id,))
-    conn.commit()
-
-    await interaction.response.send_message("All data nollställd.")
-
-@app_commands.checks.has_permissions(administrator=True)
-@tree.command(name="slut_tabell", description="Admin: mata in riktig sluttabell")
-async def slut_tabell(interaction: discord.Interaction, tabell: str):
-
-    if not correct_channel(interaction):
-        return
-
-    guild_id = str(interaction.guild.id)
-    teams = [t.strip() for t in tabell.split(",")]
-
-    if len(teams) != 16 or len(set(teams)) != 16:
-        return
-
-    c.execute("DELETE FROM final_table WHERE guild_id=?", (guild_id,))
-
-    for i, team in enumerate(teams):
-        c.execute("INSERT INTO final_table VALUES (?,?,?)", (guild_id, i+1, team))
-
-    users = c.execute(
-        "SELECT DISTINCT user_id FROM tabell WHERE guild_id=?",
-        (guild_id,)
-    ).fetchall()
-
-    for (user_id,) in users:
-        user_tips = c.execute(
-            "SELECT position, team FROM tabell WHERE guild_id=? AND user_id=?",
-            (guild_id, user_id)
-        ).fetchall()
-
-        for position, team in user_tips:
-            real = c.execute(
-                "SELECT position FROM final_table WHERE guild_id=? AND team=?",
-                (guild_id, team)
-            ).fetchone()
-
-            if real and real[0] == position:
-                add_points(guild_id, user_id, 3)
-
-    conn.commit()
-    await interaction.response.send_message("Tabellpoäng tillagda.")
 
 # ================= USER =================
 
@@ -296,33 +234,25 @@ async def tippa_match(interaction: discord.Interaction, tip: str):
     await interaction.response.send_message("Tips sparat!", ephemeral=True)
 
 @tree.command(name="tippa_tabell", description="Tippa sluttabell")
-async def tippa_tabell(interaction: discord.Interaction, tips: str):
+async def tippa_tabell(interaction: discord.Interaction):
 
     if not correct_channel(interaction):
         return
 
     if datetime.now() > TABELL_DEADLINE:
+        await interaction.response.send_message(
+            "Tabelltips är låsta.",
+            ephemeral=True
+        )
         return
 
-    guild_id = str(interaction.guild.id)
-    user_id = str(interaction.user.id)
-
-    teams = [t.strip() for t in tips.split(",")]
-
-    if len(teams) != 16 or len(set(teams)) != 16:
-        return
-
-    for lag in teams:
-        if lag not in ALLSVENSKA_LAG:
-            return
-
-    c.execute("DELETE FROM tabell WHERE guild_id=? AND user_id=?", (guild_id,user_id))
-
-    for i, team in enumerate(teams):
-        c.execute("INSERT INTO tabell VALUES (?,?,?,?)", (guild_id,user_id,i+1,team))
-
-    conn.commit()
-    await interaction.response.send_message("Tabelltips sparat!", ephemeral=True)
+    view = TabellDropdown(interaction)
+    await interaction.response.send_message(
+        "Välj lag för plats 1",
+        view=view,
+        ephemeral=True
+    )
+    view.message = await interaction.original_response()
 
 @tree.command(name="leaderboard", description="Topp 20")
 async def leaderboard(interaction: discord.Interaction):
