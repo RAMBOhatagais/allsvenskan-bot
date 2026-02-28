@@ -89,7 +89,6 @@ def add_points(guild_id, user, pts):
 class TabellDropdown(discord.ui.View):
     def __init__(self, interaction: discord.Interaction):
         super().__init__(timeout=300)
-        self.interaction = interaction
         self.guild_id = str(interaction.guild.id)
         self.user_id = str(interaction.user.id)
         self.position = 1
@@ -109,8 +108,11 @@ class TabellDropdown(discord.ui.View):
         return select
 
     async def select_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.interaction.user.id:
-            await interaction.response.send_message("Detta är inte din tabell!", ephemeral=True)
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message(
+                "Detta är inte din tabell!",
+                ephemeral=True
+            )
             return
 
         chosen = interaction.data["values"][0]
@@ -119,19 +121,37 @@ class TabellDropdown(discord.ui.View):
         self.position += 1
 
         if self.position > 16:
-            c.execute("DELETE FROM tabell WHERE guild_id=? AND user_id=?",
-                      (self.guild_id, self.user_id))
+
+            c.execute(
+                "DELETE FROM tabell WHERE guild_id=? AND user_id=?",
+                (self.guild_id, self.user_id)
+            )
 
             for i, team in enumerate(self.selected_teams):
-                c.execute("INSERT INTO tabell VALUES (?,?,?,?)",
-                          (self.guild_id, self.user_id, i+1, team))
+                c.execute(
+                    "INSERT INTO tabell VALUES (?,?,?,?)",
+                    (self.guild_id, self.user_id, i+1, team)
+                )
 
             conn.commit()
 
+            summary = ""
+            for i, team in enumerate(self.selected_teams):
+                summary += f"{i+1}. {team}\n"
+
+            embed = discord.Embed(
+                title="✅ Tabelltips sparat!",
+                description=summary,
+                color=discord.Color.green()
+            )
+            embed.set_footer(text="Du kan ändra ditt tips fram till 1 april 2026")
+
             await interaction.response.edit_message(
-                content="✅ Tabelltips sparat!",
+                content=None,
+                embed=embed,
                 view=None
             )
+
             self.stop()
             return
 
@@ -156,6 +176,7 @@ async def deadline_checker():
     await client.wait_until_ready()
 
     while not client.is_closed():
+
         rows = c.execute(
             "SELECT guild_id, deadline, round, live_sent, channel_id FROM match_settings WHERE is_open=1"
         ).fetchall()
@@ -163,6 +184,7 @@ async def deadline_checker():
         now_sweden = datetime.now(ZoneInfo("Europe/Stockholm"))
 
         for guild_id, deadline_str, round_number, live_sent, channel_id in rows:
+
             if not deadline_str:
                 continue
 
@@ -170,17 +192,31 @@ async def deadline_checker():
             deadline_dt = deadline_dt.replace(tzinfo=ZoneInfo("Europe/Stockholm"))
 
             if now_sweden >= deadline_dt:
-                c.execute("UPDATE match_settings SET is_open=0 WHERE guild_id=?", (guild_id,))
+
+                c.execute(
+                    "UPDATE match_settings SET is_open=0 WHERE guild_id=?",
+                    (guild_id,)
+                )
 
                 if live_sent == 0 and channel_id:
+
                     channel = client.get_channel(int(channel_id))
+
                     if channel:
                         embed = discord.Embed(
-                            title=f"🚨 OMGÅNG {round_number} ÄR LIVE!!!",
+                            title=f"🚨 OMGÅNG {round_number} ÄR LIVE!",
                             description="Matchen har startat.\nTips är nu stängda.",
                             color=discord.Color.red()
                         )
-                        await channel.send(f"<@&{ALLSVENSKAN_ROLE_ID}>", embed=embed)
+                        embed.set_footer(text="Allsvenskan Tipset 2026")
+                        embed.set_thumbnail(
+                            url="https://upload.wikimedia.org/wikipedia/sv/2/25/Allsvenskan_logo.svg"
+                        )
+
+                        await channel.send(
+                            f"<@&{ALLSVENSKAN_ROLE_ID}>",
+                            embed=embed
+                        )
 
                     c.execute(
                         "UPDATE match_settings SET live_sent=1 WHERE guild_id=?",
@@ -204,6 +240,7 @@ async def on_ready():
 @app_commands.checks.has_permissions(administrator=True)
 @tree.command(name="set_tipskanal", description="Admin: sätt botens kanal")
 async def set_tipskanal(interaction: discord.Interaction):
+
     guild_id = str(interaction.guild.id)
 
     c.execute("""
@@ -214,13 +251,20 @@ async def set_tipskanal(interaction: discord.Interaction):
     """, (guild_id, str(interaction.channel.id)))
 
     conn.commit()
-    await interaction.response.send_message("✅ Denna kanal är nu botens officiella tipskanal.")
+
+    await interaction.response.send_message(
+        "✅ Denna kanal är nu botens officiella tipskanal."
+    )
 
 @app_commands.checks.has_permissions(administrator=True)
 @tree.command(name="set_match", description="Admin: sätt veckans match")
 async def set_match(interaction: discord.Interaction, match: str, deadline: str, round: int):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message(
+            "Fel kanal. Använd tipskanalen.",
+            ephemeral=True
+        )
         return
 
     guild_id = str(interaction.guild.id)
@@ -228,7 +272,10 @@ async def set_match(interaction: discord.Interaction, match: str, deadline: str,
     try:
         datetime.strptime(deadline, "%Y-%m-%d %H:%M")
     except:
-        await interaction.response.send_message("Fel format YYYY-MM-DD HH:MM", ephemeral=True)
+        await interaction.response.send_message(
+            "Fel format. Använd YYYY-MM-DD HH:MM",
+            ephemeral=True
+        )
         return
 
     c.execute("""
@@ -249,9 +296,19 @@ async def set_match(interaction: discord.Interaction, match: str, deadline: str,
 async def rapportera_resultat(interaction: discord.Interaction, resultat: str):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message(
+            "Fel kanal.",
+            ephemeral=True
+        )
         return
 
+    resultat = resultat.upper()
+
     if resultat not in ["1","X","2"]:
+        await interaction.response.send_message(
+            "Ange 1, X eller 2.",
+            ephemeral=True
+        )
         return
 
     guild_id = str(interaction.guild.id)
@@ -262,6 +319,7 @@ async def rapportera_resultat(interaction: discord.Interaction, resultat: str):
     ).fetchall()
 
     winners = 0
+
     for user_id, tip in rows:
         if tip == resultat:
             add_points(guild_id, user_id, 3)
@@ -270,13 +328,19 @@ async def rapportera_resultat(interaction: discord.Interaction, resultat: str):
     c.execute("DELETE FROM matchtips WHERE guild_id=?", (guild_id,))
     conn.commit()
 
-    await interaction.response.send_message(f"{winners} fick 3 poäng!")
+    await interaction.response.send_message(
+        f"📢 Rätt resultat: {resultat}\n{winners} fick 3 poäng!"
+    )
 
 @app_commands.checks.has_permissions(administrator=True)
 @tree.command(name="reset_points", description="Admin: nollställ ALLT")
 async def reset_points(interaction: discord.Interaction):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message(
+            "Fel kanal.",
+            ephemeral=True
+        )
         return
 
     guild_id = str(interaction.guild.id)
@@ -288,19 +352,24 @@ async def reset_points(interaction: discord.Interaction):
     c.execute("DELETE FROM match_settings WHERE guild_id=?", (guild_id,))
     conn.commit()
 
-    await interaction.response.send_message("All data nollställd.")
+    await interaction.response.send_message("⚠️ All data nollställd.")
 
 @app_commands.checks.has_permissions(administrator=True)
 @tree.command(name="slut_tabell", description="Admin: mata in riktig sluttabell")
 async def slut_tabell(interaction: discord.Interaction, tabell: str):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message("Fel kanal.", ephemeral=True)
         return
 
     guild_id = str(interaction.guild.id)
     teams = [t.strip() for t in tabell.split(",")]
 
     if len(teams) != 16 or len(set(teams)) != 16:
+        await interaction.response.send_message(
+            "Du måste ange 16 unika lag.",
+            ephemeral=True
+        )
         return
 
     c.execute("DELETE FROM final_table WHERE guild_id=?", (guild_id,))
@@ -329,7 +398,8 @@ async def slut_tabell(interaction: discord.Interaction, tabell: str):
                 add_points(guild_id, user_id, 3)
 
     conn.commit()
-    await interaction.response.send_message("Tabellpoäng tillagda.")
+
+    await interaction.response.send_message("🏁 Tabellpoäng tillagda!")
 
 # ================= USER =================
 
@@ -337,9 +407,19 @@ async def slut_tabell(interaction: discord.Interaction, tabell: str):
 async def tippa_match(interaction: discord.Interaction, tip: str):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message(
+            "Fel kanal.",
+            ephemeral=True
+        )
         return
 
+    tip = tip.upper()
+
     if tip not in ["1","X","2"]:
+        await interaction.response.send_message(
+            "Ange 1, X eller 2.",
+            ephemeral=True
+        )
         return
 
     guild_id = str(interaction.guild.id)
@@ -351,18 +431,29 @@ async def tippa_match(interaction: discord.Interaction, tip: str):
     ).fetchone()
 
     if not status or status[0] == 0:
+        await interaction.response.send_message(
+            "Matchtips är stängda.",
+            ephemeral=True
+        )
         return
 
     c.execute("DELETE FROM matchtips WHERE guild_id=? AND user_id=?", (guild_id,user_id))
     c.execute("INSERT INTO matchtips VALUES (?,?,?)", (guild_id,user_id,tip))
     conn.commit()
 
-    await interaction.response.send_message("Tips sparat!", ephemeral=True)
+    embed = discord.Embed(
+        title="✅ Tips sparat!",
+        description=f"Du tippade: **{tip}**",
+        color=discord.Color.green()
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @tree.command(name="tippa_tabell", description="Tippa sluttabell")
 async def tippa_tabell(interaction: discord.Interaction):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message("Fel kanal.", ephemeral=True)
         return
 
     if datetime.now() > TABELL_DEADLINE:
@@ -384,6 +475,7 @@ async def tippa_tabell(interaction: discord.Interaction):
 async def leaderboard(interaction: discord.Interaction):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message("Fel kanal.", ephemeral=True)
         return
 
     guild_id = str(interaction.guild.id)
@@ -394,21 +486,39 @@ async def leaderboard(interaction: discord.Interaction):
     ).fetchall()
 
     if not rows:
+        await interaction.response.send_message(
+            "Inga poäng ännu.",
+            ephemeral=True
+        )
         return
 
-    msg = "🏆 Leaderboard\n\n"
+    embed = discord.Embed(
+        title="🏆 Leaderboard",
+        description="Topp 20 i tävlingen",
+        color=discord.Color.gold()
+    )
+
+    medals = ["🥇","🥈","🥉"]
 
     for i,(user_id,pts) in enumerate(rows):
         member = interaction.guild.get_member(int(user_id))
         name = member.display_name if member else f"<@{user_id}>"
-        msg += f"{i+1}. {name} - {pts}p\n"
+        prefix = medals[i] if i < 3 else f"{i+1}."
+        embed.add_field(
+            name=f"{prefix} {name}",
+            value=f"{pts} poäng",
+            inline=False
+        )
 
-    await interaction.response.send_message(msg, ephemeral=True)
+    embed.set_footer(text="Allsvenskan Tipset 2026")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @tree.command(name="placering", description="Se din placering")
 async def placering(interaction: discord.Interaction):
 
     if not correct_channel(interaction):
+        await interaction.response.send_message("Fel kanal.", ephemeral=True)
         return
 
     guild_id = str(interaction.guild.id)
@@ -419,10 +529,17 @@ async def placering(interaction: discord.Interaction):
         (guild_id,)
     ).fetchall()
 
+    if not rows:
+        await interaction.response.send_message(
+            "Inga poäng ännu.",
+            ephemeral=True
+        )
+        return
+
     for index,(uid,pts) in enumerate(rows):
         if uid == user_id:
             await interaction.response.send_message(
-                f"Din placering: {index+1}/{len(rows)}\nPoäng: {pts}",
+                f"📍 Din placering: {index+1}/{len(rows)}\nPoäng: {pts}",
                 ephemeral=True
             )
             return
